@@ -1,0 +1,73 @@
+---
+description: Sincronizar a coleção Bruno sempre que um endpoint HTTP for criado, alterado ou removido.
+globs: cmd/api/main.go,internal/core/**/*.go
+alwaysApply: false
+---
+
+# Bruno: manter coleção em sync com a API
+
+Sempre que criares, alterares ou removeres um endpoint HTTP, **atualiza a coleção Bruno no mesmo PR/tarefa**. Não deixar a API e `bruno/` dessincronizadas.
+
+## Quando aplicar
+
+- Nova rota em `cmd/api/main.go` (`mux.HandleFunc`)
+- Handler novo ou alterado em `internal/core/<feature>/handler.go` (ou `roles.go`)
+- Mudança de método, path, query params, headers, body ou resposta documentável
+
+## Onde editar
+
+```
+bruno/
+  collection.bru          # headers globais (ex.: X-Comu-User-ID)
+  environments/Local.bru  # {{host}}, {{DevUserID}}
+  {recurso}/folder.bru    # pasta do domínio (posts, users, gatherings, …)
+  {recurso}/{ação}.bru    # um pedido por endpoint
+```
+
+## Convenções
+
+- URL: `{{host}}/v1/...` (não hardcodar `localhost`)
+- `auth: inherit` — o header de utilizador vem de `collection.bru`
+- JSON: `body: json` + `Content-Type: application/json`
+- Texto simples: `body: text` (como posts/comments)
+- Path params: `params:path { id: }` com `:id` na URL
+- Nome do ficheiro: ação legível (`create gathering.bru`, `feed.bru`)
+- Bloco `docs { }` com query params, campos do body e notas relevantes
+
+## Por operação
+
+| Mudança na API | Ação em Bruno |
+|----------------|---------------|
+| Endpoint novo | Criar `.bru`; criar `folder.bru` se a pasta não existir |
+| Endpoint alterado | Atualizar URL, método, body, params e `docs` |
+| Endpoint removido | Apagar o `.bru` correspondente |
+
+## Exemplo mínimo
+
+```bru
+meta {
+  name: create gathering
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{host}}/v1/gatherings
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "Culto de Domingo",
+    "start_time": "2026-06-15T10:00:00Z"
+  }
+}
+```
+
+## Checklist antes de concluir
+
+1. Cada rota em `main.go` tem pedido correspondente em `bruno/`
+2. Método HTTP e path coincidem
+3. Body/params de exemplo reflectem o DTO do handler
+4. Endpoints removidos não ficam órfãos na coleção

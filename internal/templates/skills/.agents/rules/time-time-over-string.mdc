@@ -1,0 +1,41 @@
+---
+description: Timestamps no domínio e API de saída usam time.Time — nunca string.
+alwaysApply: true
+---
+
+# time.Time, não string
+
+Campos de instante (`CreatedAt`, `UpdatedAt`, `DeletedAt`, `StartTime`, `EndTime`, etc.) **devem ser `time.Time`** nas entidades de `internal/core/<feature>/<feature>.go` e nos DTOs de resposta em `internal/core/<feature>/handler.go`.
+
+## Permitido
+
+```go
+// Domínio
+CreatedAt time.Time
+DeletedAt time.Time // zero = ausente / não apagado
+
+// Repositório — conversão só na fronteira SQL
+formatStoredTime(t time.Time) // RFC3339 UTC
+parseStoredTime(string) (time.Time, error)
+
+// Request HTTP — time.Time no DTO, já validado por json.Unmarshal
+gathering.NewGathering(..., req.StartTime, req.EndTime)
+```
+
+## Proibido
+
+```go
+CreatedAt string
+DeletedAt *string
+func NowString() string
+
+post.CreatedAt = "2026-01-15T10:00:00Z"
+```
+
+## Nullable
+
+Usar **`time.Time` zero** (`time.Time{}`), não `*time.Time` nem string vazia, salvo pedido explícito em contrário.
+
+## Referência
+
+Ver skill `.agents/skills/golang-time/SKILL.md` para padrões completos (UTC, RFC3339, `database/sql`, testes).

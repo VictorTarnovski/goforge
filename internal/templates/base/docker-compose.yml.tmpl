@@ -1,0 +1,36 @@
+services:
+{{- if .DB}}
+  postgres:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: {{.Project}}
+      POSTGRES_PASSWORD: {{.Project}}
+      POSTGRES_DB: {{.Project}}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{.Project}}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+{{- end}}
+{{- if .HasAuthz}}
+
+  openfga:
+    image: openfga/openfga:v1.8.9
+    restart: unless-stopped
+    command: run
+    environment:
+      OPENFGA_DATASTORE_ENGINE: memory
+      OPENFGA_LOG_FORMAT: json
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+    ports:
+      - "127.0.0.1:8081:8080"
+{{- end}}
+{{if .DB}}
+volumes:
+  postgres-data:
+{{end -}}

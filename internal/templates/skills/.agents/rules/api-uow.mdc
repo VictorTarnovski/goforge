@@ -1,0 +1,34 @@
+---
+description: handler.go usa apenas UseCase.Execute; transacções ficam no use case
+globs: internal/core/*/handler.go,internal/core/*/roles.go
+alwaysApply: false
+---
+
+# Use cases na API
+
+`handler.go` de uma feature só pode chamar o `Execute(...)` dos **seus próprios** use cases (`internal/core/<feature>/usecase.go`). Nunca chama `Uow.Do` nem um `Repository` directamente.
+
+```go
+department, err := h.Create.Execute(r.Context(), department.CreateInput{
+	Name:    req.Name,
+	Members: members,
+})
+if err != nil {
+	return err
+}
+```
+
+## Evitar
+
+```go
+// ❌ Uow.Do ou Repository chamado directamente a partir do handler
+func (h *Handler) CreateDepartment(w http.ResponseWriter, r *http.Request) error {
+	return h.Uow.Do(r.Context(), func(tx uow.DBTX) error {
+		return h.Repo.Save(r.Context(), tx, department)
+	})
+}
+```
+
+## Excepção sancionada: read models sem use case próprio
+
+`department/roles.go` (`ListDepartmentRoles`) e `agenda/handler.go` (`FindAgenda`) chamam `h.Uow.Do` + `h.Repo.<Método>` directamente porque são leituras simples sem regra de negócio a proteger — não há `UseCase.Execute` a saltar. Isto é a excepção explícita, não o padrão: qualquer handler que escreva dados, ou que precise de validar algo antes de ler, passa por um use case.

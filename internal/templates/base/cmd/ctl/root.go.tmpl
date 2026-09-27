@@ -1,0 +1,27 @@
+package main
+
+import (
+	"github.com/spf13/cobra"
+{{- if .DB}}
+
+	"{{.Module}}/internal/config"
+{{- end}}
+)
+
+func newRootCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "{{.Project}}ctl",
+		Short:         "Operational tooling for {{.Project}}",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+{{- if .DB}}
+
+	v := config.New("{{.EnvPrefix}}")
+	config.BindPostgres(cmd, v)
+	cmd.AddCommand(newMigrateCmd(v))
+{{- end}}
+	// goforge:add-command
+
+	return cmd
+}

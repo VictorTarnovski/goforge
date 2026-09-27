@@ -1,0 +1,84 @@
+package httpx
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+// ProblemDetail is an RFC 7807 problem+json body.
+type ProblemDetail struct {
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	Status   int    `json:"status"`
+	Detail   string `json:"detail,omitempty"`
+	Instance string `json:"instance,omitempty"`
+}
+
+// ProblemDetailOption customizes a ProblemDetail built by NewProblemDetail.
+type ProblemDetailOption func(*ProblemDetail)
+
+// WithDetail sets the ProblemDetail's Detail field.
+func WithDetail(detail string) ProblemDetailOption {
+	return func(p *ProblemDetail) { p.Detail = detail }
+}
+
+// NewProblemDetail builds a ProblemDetail, deriving Title from status.
+func NewProblemDetail(problemType string, status int, instance string, opts ...ProblemDetailOption) ProblemDetail {
+	p := ProblemDetail{
+		Type:     problemType,
+		Title:    http.StatusText(status),
+		Status:   status,
+		Instance: instance,
+	}
+	for _, opt := range opts {
+		opt(&p)
+	}
+
+	return p
+}
+
+// Pagination describes one page of a list response.
+type Pagination struct {
+	NextCursor *string `json:"next_cursor"`
+	Limit      int     `json:"limit"`
+}
+
+// Envelope wraps every successful JSON response body.
+type Envelope struct {
+	Data       any         `json:"data"`
+	Pagination *Pagination `json:"pagination,omitempty"`
+}
+
+// EnvelopeOption customizes an Envelope built by NewEnvelope.
+type EnvelopeOption func(*Envelope)
+
+// WithPagination attaches pagination info to an Envelope.
+func WithPagination(p Pagination) EnvelopeOption {
+	return func(e *Envelope) { e.Pagination = &p }
+}
+
+// NewEnvelope wraps data in an Envelope.
+func NewEnvelope(data any, opts ...EnvelopeOption) Envelope {
+	e := Envelope{Data: data}
+	for _, opt := range opts {
+		opt(&e)
+	}
+
+	return e
+}
+
+func writeProblem(w http.ResponseWriter, p ProblemDetail) error {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(p.Status)
+
+	return json.NewEncoder(w).Encode(p)
+}
+
+// WriteJSON writes resp as the JSON response body with the given status
+// code.
+func WriteJSON(w http.ResponseWriter, status int, resp Envelope) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	return json.NewEncoder(w).Encode(resp)
+}

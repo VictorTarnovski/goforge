@@ -1,0 +1,86 @@
+// Package config wires environment variables and CLI flags to viper for
+// both cmd/api and cmd/ctl.
+package config
+
+import (
+	"strings"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+{{- if .DB}}
+
+	"{{.Module}}/internal/db"
+{{- end}}
+{{- if .HasAuthz}}
+
+	"{{.Module}}/internal/authz"
+{{- end}}
+)
+
+// New builds a viper instance reading COMU_-style env vars prefixed with
+// envPrefix (dashes replaced with underscores), plus whatever flags callers
+// bind to it.
+func New(envPrefix string) *viper.Viper {
+	v := viper.New()
+	v.SetEnvPrefix(envPrefix)
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	v.AutomaticEnv()
+
+	return v
+}
+
+// BindOIDC registers the OIDC issuer/audience flags on cmd.
+func BindOIDC(cmd *cobra.Command, v *viper.Viper) {
+	cmd.PersistentFlags().String("oidc-issuer", "", "OIDC issuer URL")
+	cmd.PersistentFlags().String("oidc-audience", "", "OIDC audience / client id")
+
+	_ = v.BindPFlag("oidc-issuer", cmd.PersistentFlags().Lookup("oidc-issuer"))
+	_ = v.BindPFlag("oidc-audience", cmd.PersistentFlags().Lookup("oidc-audience"))
+}
+{{if .DB}}
+// DefaultDSN is the local-dev Postgres connection string; every real
+// deployment overrides it via --dsn or the _DSN env var.
+//
+//nolint:gosec // this is a local-only default, not a real credential
+const DefaultDSN = "postgres://{{.Project}}:{{.Project}}@localhost:5432/{{.Project}}?sslmode=disable"
+
+// BindPostgres registers the --dsn flag on cmd.
+func BindPostgres(cmd *cobra.Command, v *viper.Viper) {
+	cmd.PersistentFlags().String("dsn", DefaultDSN, "Postgres connection string")
+	_ = v.BindPFlag("dsn", cmd.PersistentFlags().Lookup("dsn"))
+}
+
+// DSN returns the configured Postgres connection string, validated.
+func DSN(v *viper.Viper) (string, error) {
+	dsn := v.GetString("dsn")
+	if err := db.ValidateDSN(dsn); err != nil {
+		return "", err
+	}
+
+	return dsn, nil
+}
+{{end -}}
+{{if .HasAuthz}}
+// BindOpenFGA registers the OpenFGA connection flags on cmd.
+func BindOpenFGA(cmd *cobra.Command, v *viper.Viper) {
+	cmd.PersistentFlags().String("openfga-api-url", "", "OpenFGA API URL")
+	cmd.PersistentFlags().String("openfga-store-id", "", "OpenFGA store id")
+	cmd.PersistentFlags().String("openfga-model-id", "", "OpenFGA authorization model id")
+	cmd.PersistentFlags().String("openfga-api-token", "", "OpenFGA API token")
+
+	_ = v.BindPFlag("openfga-api-url", cmd.PersistentFlags().Lookup("openfga-api-url"))
+	_ = v.BindPFlag("openfga-store-id", cmd.PersistentFlags().Lookup("openfga-store-id"))
+	_ = v.BindPFlag("openfga-model-id", cmd.PersistentFlags().Lookup("openfga-model-id"))
+	_ = v.BindPFlag("openfga-api-token", cmd.PersistentFlags().Lookup("openfga-api-token"))
+}
+
+// OpenFGA returns the configured OpenFGA connection settings.
+func OpenFGA(v *viper.Viper) authz.Config {
+	return authz.Config{
+		APIURL:               v.GetString("openfga-api-url"),
+		StoreID:              v.GetString("openfga-store-id"),
+		AuthorizationModelID: v.GetString("openfga-model-id"),
+		APIToken:             v.GetString("openfga-api-token"),
+	}
+}
+{{end -}}

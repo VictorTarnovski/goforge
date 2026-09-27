@@ -1,0 +1,44 @@
+# {{.Project}}
+
+Scaffolded with [goforge](https://github.com/VictorTarnovski/goforge).
+
+## Layout
+
+- `cmd/api` — the HTTP server entrypoint.
+- `cmd/ctl` — operational CLI (`{{.Project}}ctl`){{if .DB}}, including `migrate`{{end}}.
+- `internal/<domain>` — one package per business domain, colocating its model, service, repository{{if .DB}}, and migration{{end}}, and HTTP handler.
+- `internal/httpx` — shared HTTP kit: JSON envelopes, RFC 7807 problem details, error classification.
+{{- if .DB}}
+- `internal/db`, `internal/uow` — database connection and unit-of-work helpers.
+- `migrations/` — goose SQL migrations, run via `{{.Project}}ctl migrate`.
+{{- end}}
+- `internal/authn` — OIDC bearer-token verification, applied to every request.
+{{- if .HasAuthz}}
+- `internal/authz` — OpenFGA permission checks.
+{{- end}}
+- `docs/adr/` — architecture decision records.
+- `.claude/skills`, `.agents/rules` — the Go conventions this project follows, vendored at scaffold time.
+
+## Getting started
+
+```sh
+go mod tidy
+{{- if .DB}}
+cp .env.example .env   # then edit DSN / OIDC /{{if .HasAuthz}}OpenFGA{{end}} settings
+docker compose up -d   # starts{{if .DB}} Postgres{{end}}{{if .HasAuthz}} and OpenFGA{{end}}
+go run ./cmd/ctl migrate
+{{- end}}
+make run
+```
+
+## Common tasks
+
+See `Makefile` for `run`, `test`, `lint`, and{{if .DB}} `migrate`{{end}}.
+
+## Generating a new domain
+
+```sh
+goforge generate domain <name> --fields name:string,count:int
+```
+
+Adds `internal/<name>/` as a full vertical slice{{if .DB}}, plus a migration under `migrations/`{{end}}.

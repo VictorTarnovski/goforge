@@ -1,0 +1,14 @@
+.PHONY: run test lint{{if .DB}} migrate{{end}}
+
+run:
+	go run ./cmd/api
+
+test:
+	go test ./...
+
+lint:
+	golangci-lint run ./...
+{{if .DB}}
+migrate:
+	go run ./cmd/ctl migrate
+{{end}}

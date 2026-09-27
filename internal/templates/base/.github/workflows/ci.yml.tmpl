@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+{{- if .DB}}
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: {{.Project}}
+          POSTGRES_PASSWORD: {{.Project}}
+          POSTGRES_DB: {{.Project}}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U {{.Project}}"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+{{- end}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - run: go build ./...
+      - run: go test ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest

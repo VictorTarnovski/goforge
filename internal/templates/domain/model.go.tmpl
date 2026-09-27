@@ -1,0 +1,119 @@
+// Package {{.Package}} is a generated vertical slice: the {{.Type}} domain
+// type, its service, repository, and HTTP handler.
+package {{.Package}}
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+{{if .HasTimeField}}
+	"time"
+{{end}}
+	"github.com/google/uuid"
+)
+
+var (
+	// Err{{.Type}}IDInvalid is returned when a {{.Type}}ID fails to parse as a UUID.
+	Err{{.Type}}IDInvalid = errors.New("invalid {{.Package}} id")
+	// Err{{.Type}}NotFound is returned when a {{.Type}} lookup finds nothing.
+	Err{{.Type}}NotFound = errors.New("{{.Package}} not found")
+{{- range .Fields}}
+{{- if eq .GoType "string"}}
+	// ErrEmpty{{.Exported}} is returned when {{.Exported}} is blank.
+	ErrEmpty{{.Exported}} = errors.New("{{$.Package}} {{.SQLColumn}} cannot be empty")
+{{- end}}
+{{- end}}
+)
+
+// {{.Type}}ID uniquely identifies a {{.Type}}.
+type {{.Type}}ID string
+
+// New{{.Type}}ID validates raw as a UUID and wraps it as a {{.Type}}ID.
+func New{{.Type}}ID(raw string) ({{.Type}}ID, error) {
+	id := {{.Type}}ID(raw)
+	if err := id.Validate(); err != nil {
+		return "", err
+	}
+
+	return id, nil
+}
+
+// Value returns id as a plain string.
+func (id {{.Type}}ID) Value() string { return string(id) }
+
+// String implements fmt.Stringer.
+func (id {{.Type}}ID) String() string { return string(id) }
+
+// MarshalJSON implements json.Marshaler.
+func (id {{.Type}}ID) MarshalJSON() ([]byte, error) {
+	return json.Marshal(id.Value())
+}
+
+// UnmarshalJSON implements json.Unmarshaler, validating the decoded id.
+func (id *{{.Type}}ID) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+
+	*id = {{.Type}}ID(s)
+
+	return id.Validate()
+}
+
+// Validate reports whether id is a well-formed UUID, normalizing it to
+// uuid's canonical string form in place.
+func (id *{{.Type}}ID) Validate() error {
+	u, err := uuid.Parse(strings.TrimSpace(string(*id)))
+	if err != nil {
+		return fmt.Errorf("%w: %w", Err{{.Type}}IDInvalid, err)
+	}
+
+	*id = {{.Type}}ID(u.String())
+
+	return nil
+}
+
+// {{.Type}} is this domain's aggregate.
+type {{.Type}} struct {
+	id {{.Type}}ID
+{{- range .Fields}}
+	{{.Unexported}} {{.GoType}}
+{{- end}}
+}
+
+// New{{.Type}} builds and validates a {{.Type}}.
+func New{{.Type}}(id {{.Type}}ID{{range .Fields}}, {{.Unexported}} {{.GoType}}{{end}}) (*{{.Type}}, error) {
+	v := &{{.Type}}{
+		id: id,
+{{- range .Fields}}
+		{{.Unexported}}: {{.Unexported}},
+{{- end}}
+	}
+	if err := v.Validate(); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+// Validate reports whether v's fields satisfy this domain's invariants.
+func (v *{{.Type}}) Validate() error {
+{{- range .Fields}}
+{{- if eq .GoType "string"}}
+	v.{{.Unexported}} = strings.TrimSpace(v.{{.Unexported}})
+	if v.{{.Unexported}} == "" {
+		return ErrEmpty{{.Exported}}
+	}
+{{- end}}
+{{- end}}
+	return nil
+}
+
+// ID returns v's identifier.
+func (v *{{.Type}}) ID() {{.Type}}ID { return v.id }
+{{range .Fields}}
+// {{.Exported}} returns v's {{.SQLColumn}}.
+func (v *{{$.Type}}) {{.Exported}}() {{.GoType}} { return v.{{.Unexported}} }
+{{- end}}

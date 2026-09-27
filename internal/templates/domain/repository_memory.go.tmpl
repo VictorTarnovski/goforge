@@ -1,0 +1,101 @@
+package {{.Package}}
+
+import (
+	"context"
+	"slices"
+	"sync"
+)
+
+// Repository is an in-memory store. It exists so this domain is runnable and
+// testable without a database; swap it for a real one by scaffolding with
+// --db and regenerating (or hand-writing) a persistent Repository with the
+// same method set.
+type Repository struct {
+	mu    sync.RWMutex
+	items map[{{.Type}}ID]*{{.Type}}
+}
+
+// NewRepository builds an empty Repository.
+func NewRepository() *Repository {
+	return &Repository{items: make(map[{{.Type}}ID]*{{.Type}})}
+}
+
+// Save upserts v.
+func (r *Repository) Save(_ context.Context, v *{{.Type}}) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.items[v.ID()] = v
+
+	return nil
+}
+
+// FindByID returns the {{.Type}} with the given id, or Err{{.Type}}NotFound.
+func (r *Repository) FindByID(_ context.Context, id {{.Type}}ID) (*{{.Type}}, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	v, ok := r.items[id]
+	if !ok {
+		return nil, Err{{.Type}}NotFound
+	}
+
+	return v, nil
+}
+
+// List returns up to limit {{.Type}}s ordered by id, after cursor if given.
+func (r *Repository) List(_ context.Context, cursor *{{.Type}}ID, limit int) ([]*{{.Type}}, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	ids := make([]{{.Type}}ID, 0, len(r.items))
+	for id := range r.items {
+		ids = append(ids, id)
+	}
+
+	slices.Sort(ids)
+
+	started := cursor == nil
+	items := make([]*{{.Type}}, 0, limit)
+
+	for _, id := range ids {
+		if !started {
+			if id == *cursor {
+				started = true
+			}
+
+			continue
+		}
+
+		items = append(items, r.items[id])
+		if len(items) == limit {
+			break
+		}
+	}
+
+	return items, nil
+}
+
+// Delete removes the {{.Type}} with the given id.
+func (r *Repository) Delete(_ context.Context, id {{.Type}}ID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.items[id]; !ok {
+		return Err{{.Type}}NotFound
+	}
+
+	delete(r.items, id)
+
+	return nil
+}
+
+// Exists reports whether a {{.Type}} with the given id exists.
+func (r *Repository) Exists(_ context.Context, id {{.Type}}ID) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	_, ok := r.items[id]
+
+	return ok, nil
+}

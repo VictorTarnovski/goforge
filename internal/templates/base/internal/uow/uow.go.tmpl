@@ -1,0 +1,71 @@
+// Package uow provides a minimal unit-of-work over database/sql: one
+// transaction per UnitOfWork.Do call, committed if fn succeeds and rolled
+// back otherwise.
+package uow
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+)
+
+// DBTX is the subset of *sql.DB and *sql.Tx that repositories need, so they
+// can run against either a live transaction or (in tests) a bare connection.
+type DBTX interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// UnitOfWork runs fn inside one transaction, committing on success and
+// rolling back on error or panic.
+type UnitOfWork interface {
+	Do(ctx context.Context, fn func(tx DBTX) error) error
+}
+
+// QueryExists runs a `SELECT EXISTS (...)`-shaped query and returns its
+// boolean result.
+func QueryExists(ctx context.Context, db DBTX, query string, args ...any) (bool, error) {
+	var ok bool
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&ok); err != nil {
+		return false, err
+	}
+
+	return ok, nil
+}
+
+type unitOfWork struct {
+	db *sql.DB
+}
+
+// New builds a UnitOfWork backed by db.
+func New(db *sql.DB) UnitOfWork {
+	return &unitOfWork{db: db}
+}
+
+func (u *unitOfWork) Do(ctx context.Context, fn func(tx DBTX) error) error {
+	tx, err := u.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err := fn(tx); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	committed = true
+
+	return nil
+}

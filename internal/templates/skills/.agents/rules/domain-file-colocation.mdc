@@ -1,0 +1,52 @@
+---
+description: Manter cada feature no seu próprio pacote Go, colocando entidade, repositório, use cases e handler juntos.
+alwaysApply: true
+---
+
+# Pacotes por feature (sem camadas genéricas)
+
+O backend é feature-driven, agrupado em dois subdomínios: `internal/core/<feature>/` (negócio: member, department, gathering, agenda) e `internal/iam/<parte>/` (autenticação/autorização: authn, authz). Cada feature vive no seu próprio pacote Go — não num ficheiro "de domínio" partilhado entre camadas.
+
+## Ficheiros canónicos por feature
+
+Dentro de `internal/core/<feature>/`:
+
+- `<feature>.go` — tipos de ID, entidade(s), erros sentinela
+- `repository.go` — `Repository` **stateless** (`NewRepository()` sem argumentos), métodos recebem `(ctx, tx uow.DBTX, ...)`
+- `usecase.go` — use cases (`Uow uow.UnitOfWork` + `*Repository` como campos, construídos uma única vez em `cmd/api/main.go`); helpers exportados tipo `RequireExists`/`RequireMember` para outras features chamarem
+- `handler.go` — handlers HTTP + DTOs + `ClassifyError`
+
+Extras sancionados, quando a feature precisa:
+
+- `roles.go` — sub-recursos específicos da feature (ex.: `department/roles.go`)
+- `errors.go` — quando `ClassifyError` cresce ao ponto de merecer ficheiro próprio (ex.: `iam/errors.go`)
+
+Em `internal/iam/`, a mesma lógica aplica-se por sub-pacote (`authn/`, `authz/`), mais `iam.go` (middleware `Authenticate`/`Guard`) e `errors.go` na raiz de `iam`.
+
+## Testes
+
+Testes ficam colocados como `<ficheiro>_test.go` no mesmo pacote:
+
+- `member.go` → `member_test.go` (entidade, puro)
+- `handler.go` → `handler_test.go` (black-box HTTP, Postgres real via `internal/db.TestDB`)
+- `repository.go` → `repository_test.go` (quando a feature tem um round-trip próprio para testar)
+
+Fixtures de **outra** feature (ex.: `department`'s tests a precisar de um `member`) chamam o use case exportado da outra feature diretamente — nunca importam ficheiros `_test.go` de outro pacote (não são importáveis) nem duplicam a lógica de produção. Se uma fixture cruzada criar um ciclo de import (`gathering` depende de `department`, logo o teste de `department` não pode importar `gathering`), o teste cruzado vive em `internal/core/coretest`, que depende de ambas as features sem ser dependido por nenhuma.
+
+## Proibido
+
+Não recriar as camadas genéricas antigas — `internal/domain`, `internal/application`, `internal/infra`, `internal/presentation` — nem como pacotes novos nem como padrão para features futuras. Não voltar a espalhar uma feature por vários pacotes-camada (`domain.X`, `application.X`, `infra/sql.X`, `presentation/http.X`); tudo o que pertence a `X` vive em `internal/core/X/`.
+
+## Subdomínios
+
+`core` e `iam` são, hoje, os dois únicos subdomínios. **Nunca** import um do outro: `core/*` depende de `internal/uow`, `internal/tenant`; `iam/*` depende de `internal/tenant`, `internal/httpx`. Plataforma partilhada (`internal/uow`, `internal/db`, `internal/httpx`, `internal/tenant`) fica directamente sob `internal/`, nunca aninhada dentro de `core` ou `iam`.
+
+## Exemplo (este projeto)
+
+| Feature | Pacote | Ficheiros |
+|---------|--------|-----------|
+| Member | `internal/core/member` | `member.go`, `repository.go`, `usecase.go`, `handler.go` |
+| Department | `internal/core/department` | `department.go`, `repository.go`, `roles.go`, `usecase.go`, `handler.go` |
+| Gathering | `internal/core/gathering` | `gathering.go`, `repository.go`, `usecase.go`, `handler.go` |
+| Agenda | `internal/core/agenda` | `repository.go`, `handler.go` |
+| IAM | `internal/iam` | `authn/oidc.go`, `authz/fga.go`, `iam.go`, `errors.go` |

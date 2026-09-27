@@ -1,0 +1,251 @@
+package {{.Package}}
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+{{if .HasTimeField}}
+	"time"
+{{end}}
+{{- if .HasAuthz}}
+	"{{.Module}}/internal/authn"
+	"{{.Module}}/internal/authz"
+{{- end}}
+{{- if .DB}}
+	"{{.Module}}/internal/uow"
+{{- end}}
+	"{{.Module}}/internal/httpx"
+)
+
+// Handler serves {{.Type}}'s HTTP routes.
+type Handler struct {
+	Service *Service
+{{- if .HasAuthz}}
+	Authz *authz.Checker
+{{- end}}
+}
+
+// Wire builds this domain's dependencies and registers its routes — the one
+// call cmd/api/main.go needs per domain (see the `domains` slice there).
+func Wire(mux *http.ServeMux, kit *httpx.Kit{{if .DB}}, u uow.UnitOfWork{{end}}{{if .HasAuthz}}, checker *authz.Checker{{end}}) {
+	repo := NewRepository()
+
+	h := &Handler{
+		Service: NewService({{if .DB}}u, {{end}}repo),
+{{- if .HasAuthz}}
+		Authz: checker,
+{{- end}}
+	}
+
+	h.RegisterRoutes(mux, kit)
+}
+
+// RegisterRoutes wires h's CRUD routes into mux.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, kit *httpx.Kit) {
+	mux.HandleFunc("POST /v1/{{.Route}}", kit.Wrap(h.Create))
+	mux.HandleFunc("GET /v1/{{.Route}}", kit.Wrap(h.List))
+	mux.HandleFunc("GET /v1/{{.Route}}/{id}", kit.Wrap(h.Find))
+	mux.HandleFunc("PATCH /v1/{{.Route}}/{id}", kit.Wrap(h.Update))
+	mux.HandleFunc("DELETE /v1/{{.Route}}/{id}", kit.Wrap(h.Delete))
+}
+{{if .HasAuthz}}
+func (h *Handler) authorize(r *http.Request, relation, object string) error {
+	p, err := authn.PrincipalFromContext(r.Context())
+	if err != nil {
+		return err
+	}
+
+	allowed, err := h.Authz.Check(r.Context(), "user:"+p.Subject, relation, object)
+	if err != nil {
+		return err
+	}
+
+	if !allowed {
+		return httpx.ErrForbidden
+	}
+
+	return nil
+}
+{{end}}
+type {{.Package}}Request struct {
+{{- range .Fields}}
+	{{.Exported}} {{.GoType}} `json:"{{.JSONTag}}"`
+{{- end}}
+}
+
+type {{.Package}}Response struct {
+	ID {{.Type}}ID `json:"id"`
+{{- range .Fields}}
+	{{.Exported}} {{.GoType}} `json:"{{.JSONTag}}"`
+{{- end}}
+}
+
+func to{{.Type}}Response(v *{{.Type}}) {{.Package}}Response {
+	return {{.Package}}Response{
+		ID: v.ID(),
+{{- range .Fields}}
+		{{.Exported}}: v.{{.Exported}}(),
+{{- end}}
+	}
+}
+
+// Create handles POST /v1/{{.Route}}.
+func (h *Handler) Create(w http.ResponseWriter, r *http.Request) error {
+{{- if .HasAuthz}}
+	if err := h.authorize(r, "can_create", "{{.Route}}"); err != nil {
+		return err
+	}
+{{- end}}
+
+	req, err := httpx.DecodeBody[{{.Package}}Request](r)
+	if err != nil {
+		return err
+	}
+
+	v, err := h.Service.Create(r.Context(), CreateInput(req))
+	if err != nil {
+		return err
+	}
+
+	return httpx.WriteJSON(w, http.StatusCreated, httpx.NewEnvelope(to{{.Type}}Response(v)))
+}
+
+// Update handles PATCH /v1/{{.Route}}/{id}.
+func (h *Handler) Update(w http.ResponseWriter, r *http.Request) error {
+	id, err := New{{.Type}}ID(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+{{- if .HasAuthz}}
+
+	if err := h.authorize(r, "can_manage", "{{.Package}}:"+id.Value()); err != nil {
+		return err
+	}
+{{- end}}
+
+	req, err := httpx.DecodeBody[{{.Package}}Request](r)
+	if err != nil {
+		return err
+	}
+
+	v, err := h.Service.Update(r.Context(), UpdateInput{
+		{{.Type}}ID: id,
+{{- range .Fields}}
+		{{.Exported}}: req.{{.Exported}},
+{{- end}}
+	})
+	if err != nil {
+		return err
+	}
+
+	return httpx.WriteJSON(w, http.StatusOK, httpx.NewEnvelope(to{{.Type}}Response(v)))
+}
+
+// Find handles GET /v1/{{.Route}}/{id}.
+func (h *Handler) Find(w http.ResponseWriter, r *http.Request) error {
+	id, err := New{{.Type}}ID(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+{{- if .HasAuthz}}
+
+	if err := h.authorize(r, "can_view", "{{.Package}}:"+id.Value()); err != nil {
+		return err
+	}
+{{- end}}
+
+	v, err := h.Service.Find(r.Context(), FindInput{ {{.Type}}ID: id})
+	if err != nil {
+		return err
+	}
+
+	return httpx.WriteJSON(w, http.StatusOK, httpx.NewEnvelope(to{{.Type}}Response(v)))
+}
+
+// List handles GET /v1/{{.Route}}.
+func (h *Handler) List(w http.ResponseWriter, r *http.Request) error {
+{{- if .HasAuthz}}
+	if err := h.authorize(r, "can_view", "{{.Route}}"); err != nil {
+		return err
+	}
+{{- end}}
+
+	limit := Default{{.Type}}sPageSize
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return err
+		}
+
+		limit = parsed
+	}
+
+	output, err := h.Service.List(r.Context(), ListInput{
+		Cursor: r.URL.Query().Get("cursor"),
+		Limit:  limit,
+	})
+	if err != nil {
+		return err
+	}
+
+	res := make([]{{.Package}}Response, len(output.Items))
+	for i, v := range output.Items {
+		res[i] = to{{.Type}}Response(v)
+	}
+
+	var nextCursor *string
+	if output.NextCursor != "" {
+		nextCursor = &output.NextCursor
+	}
+
+	return httpx.WriteJSON(w, http.StatusOK, httpx.NewEnvelope(res, httpx.WithPagination(httpx.Pagination{
+		NextCursor: nextCursor,
+		Limit:      output.Limit,
+	})))
+}
+
+// Delete handles DELETE /v1/{{.Route}}/{id}.
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
+	id, err := New{{.Type}}ID(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+{{- if .HasAuthz}}
+
+	if err := h.authorize(r, "can_manage", "{{.Package}}:"+id.Value()); err != nil {
+		return err
+	}
+{{- end}}
+
+	if err := h.Service.Delete(r.Context(), DeleteInput{ {{.Type}}ID: id}); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+
+	return nil
+}
+
+// ClassifyError maps {{.Package}}'s domain errors to RFC 7807 problem
+// details, for httpx.NewErrorMapper.
+func ClassifyError(err error) (httpx.ProblemDetail, bool) {
+	switch {
+	case errors.Is(err, Err{{.Type}}IDInvalid){{range .Fields}}{{if eq .GoType "string"}},
+		errors.Is(err, ErrEmpty{{.Exported}}){{end}}{{end}}:
+		return httpx.NewProblemDetail(
+			"https://datatracker.ietf.org/doc/html/rfc7231#section-6.5.1",
+			http.StatusBadRequest,
+			"",
+			httpx.WithDetail(err.Error()),
+		), true
+	case errors.Is(err, Err{{.Type}}NotFound):
+		return httpx.NewProblemDetail(
+			"https://datatracker.ietf.org/doc/html/rfc7231#section-6.5.4",
+			http.StatusNotFound,
+			"",
+			httpx.WithDetail(httpx.ErrNotFound.Error()),
+		), true
+	}
+
+	return httpx.ProblemDetail{}, false
+}

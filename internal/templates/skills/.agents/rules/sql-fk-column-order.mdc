@@ -1,0 +1,51 @@
+---
+description: Ordem de colunas em tabelas e SQL — FKs por último, antes das colunas de auditoria.
+globs: "**/*.sql,**/*.go"
+alwaysApply: false
+---
+
+# Ordem de colunas: FKs antes da auditoria
+
+Em `CREATE TABLE`, `ALTER TABLE` e em listas explícitas de colunas em `INSERT` / `SELECT`, usar esta ordem:
+
+1. Chave primária e identificadores (`id`, …)
+2. Atributos que não são FK (texto, números, flags, contagens desnormalizadas, etc.)
+3. **Todas as colunas de chave estrangeira** (`user_id`, `author_id`, `post_id`, …)
+4. **Colunas de auditoria** por último (`created_at`, `updated_at`, `deleted_at`, …)
+
+## Exemplo
+
+```sql
+-- Correto: dados próprios → FK → auditoria
+CREATE TABLE posts (
+	id TEXT PRIMARY KEY,
+	body TEXT NOT NULL,
+	like_count INTEGER NOT NULL DEFAULT 0,
+	comment_count INTEGER NOT NULL DEFAULT 0,
+	author_id TEXT NOT NULL REFERENCES users (id),
+	created_at TEXT NOT NULL
+);
+
+CREATE TABLE comments (
+	id TEXT PRIMARY KEY,
+	body TEXT NOT NULL,
+	post_id TEXT NOT NULL REFERENCES posts (id),
+	author_id TEXT NOT NULL REFERENCES users (id),
+	created_at TEXT NOT NULL
+);
+```
+
+## Evitar
+
+Colocar FK no meio de campos “próprios” ou antes de contagens/atributos que não referenciam outras tabelas.
+
+## Tabelas só com FKs
+
+Tabelas de junção (ex.: `follows`, `post_likes`) sem colunas de auditoria: manter apenas as FKs; a ordem entre FKs pode seguir o par já usado no projeto (ex.: `post_id`, `user_id`).
+
+## Âmbito
+
+- Migrations e ficheiros `.sql`.
+- Strings SQL em Go (`internal/core/*/repository.go`, testes).
+
+Alinhar listas de colunas em `INSERT`/`SELECT` com a mesma ordem física da tabela quando forem explícitas.

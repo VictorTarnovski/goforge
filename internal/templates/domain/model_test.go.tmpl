@@ -1,0 +1,63 @@
+package {{.Package}}_test
+
+import (
+	"testing"
+{{if .HasTimeField}}
+	"time"
+{{end}}
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+
+	"{{.Module}}/internal/{{.Package}}"
+)
+
+func validID(t *testing.T) {{.Package}}.{{.Type}}ID {
+	t.Helper()
+
+	u, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	id, err := {{.Package}}.New{{.Type}}ID(u.String())
+	require.NoError(t, err)
+
+	return id
+}
+
+func TestNew{{.Type}}(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		build   func(id {{.Package}}.{{.Type}}ID) (*{{.Package}}.{{.Type}}, error)
+		wantErr error
+	}{
+		{
+			name: "valid",
+			build: func(id {{.Package}}.{{.Type}}ID) (*{{.Package}}.{{.Type}}, error) {
+				return {{.Package}}.New{{.Type}}(id{{range .Fields}}, {{.Example}}{{end}})
+			},
+		},
+{{- if .FirstStringField}}
+		{
+			name: "empty {{.FirstStringField.SQLColumn}}",
+			build: func(id {{.Package}}.{{.Type}}ID) (*{{.Package}}.{{.Type}}, error) {
+				return {{.Package}}.New{{.Type}}(id{{range .Fields}}, {{if eq .Unexported $.FirstStringField.Unexported}}""{{else}}{{.Example}}{{end}}{{end}})
+			},
+			wantErr: {{.Package}}.ErrEmpty{{.FirstStringField.Exported}},
+		},
+{{- end}}
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := tt.build(validID(t))
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}

@@ -1,0 +1,41 @@
+// Package httpx is the shared HTTP kit: JSON envelopes, RFC 7807 problem
+// details, error classification, and CORS — every domain's handler is built
+// on top of it.
+package httpx
+
+import (
+	"net/http"
+	"strings"
+)
+
+// CORS allows cross-origin requests only from allowedOrigins.
+func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
+	allowed := make(map[string]struct{}, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		if origin = strings.TrimSpace(origin); origin != "" {
+			allowed[origin] = struct{}{}
+		}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("Vary", "Origin")
+
+			if origin := r.Header.Get("Origin"); origin != "" {
+				if _, ok := allowed[origin]; ok {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+					w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+					w.Header().Set("Access-Control-Max-Age", "600")
+				}
+			}
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}

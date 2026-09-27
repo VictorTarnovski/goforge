@@ -1,0 +1,45 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+
+	"{{.Module}}/internal/config"
+	"{{.Module}}/internal/db"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+)
+
+func newMigrateCmd(v *viper.Viper) *cobra.Command {
+	return &cobra.Command{
+		Use:   "migrate",
+		Short: "Apply pending database migrations",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runMigrate(cmd.Context(), v)
+		},
+	}
+}
+
+func runMigrate(ctx context.Context, v *viper.Viper) error {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	dsn, err := config.DSN(v)
+	if err != nil {
+		return err
+	}
+
+	database, err := db.Open(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = database.Close() }()
+
+	if err := db.Migrate(ctx, database); err != nil {
+		return err
+	}
+
+	logger.Info("migrate: schema is up to date")
+	return nil
+}

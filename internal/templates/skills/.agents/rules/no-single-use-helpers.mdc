@@ -1,0 +1,48 @@
+---
+description: Só extrair helper quando a mesma lógica é usada em 2+ sítios
+globs: **/*.go
+alwaysApply: false
+---
+
+# Helpers: reutilização real
+
+Não criar funções auxiliares (helpers) para lógica usada **uma única vez**. Inline no call site.
+
+## Quando extrair
+
+Extrair helper **só** quando a **mesma lógica** aparece em **dois ou mais** sítios (handlers, métodos, testes com comportamento duplicado de produção, etc.).
+
+## Quando não extrair
+
+- Função chamada uma vez só — manter inline.
+- Wrapper fino à volta de uma única chamada — manter inline.
+- “Organizar” um handler longo sem reutilização — preferir inline.
+
+## Exemplos
+
+```go
+// ❌ Evitar — usado só em toPostResponses
+func buildPostResponse(p domain.Post, ...) postResponse { ... }
+
+// ✅ OK — requireUserExists usado em CreatePost, CreateComment, LikePost, FollowUser, ...
+func requireUserExists(ctx context.Context, users domain.UserRepository, id domain.UserID) error { ... }
+```
+
+```go
+// ❌ Evitar — inPlaceholders só servia expandInClause
+func inPlaceholders(n int) string { ... }
+func expandInClause(query string, count int) string { ... }
+
+// ✅ OK — expandInClause usado em post.go e user.go
+func expandInClause(query string, count int) string { ... }
+```
+
+## Exceções
+
+- Métodos de interface / repositório — não são “helpers”; implementam contratos.
+- Handlers HTTP (`(h *Handlers) Foo`) — entry points, não helpers extraídos.
+- Testes: helper de teste só se o setup se repete **2+ vezes** no mesmo ficheiro ou entre testes.
+
+## Reutilização entre pacotes (`internal/core/*`)
+
+"Single-use" avalia-se **por pacote**, não por ficheiro. `member.RequireExists` é chamado a partir de `department` e `gathering` — dois pacotes diferentes, não dois sítios dentro do mesmo pacote — mas continua a ser reutilização real e tem de ficar exportado. Não o torne inline nem o esconda como não-exportado só porque, visto de dentro de `member`, parece ter "um único uso".

@@ -1,0 +1,117 @@
+package {{.Package}}
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+{{if .HasTimeField}}
+	"time"
+{{end}}
+	"{{.Module}}/internal/uow"
+)
+
+const (
+	upsert{{.Type}}SQL = `INSERT INTO {{.Table}} (id{{range .Fields}}, {{.SQLColumn}}{{end}}) VALUES ($1{{range .Fields}}, ${{.Placeholder}}{{end}}) ON CONFLICT (id) DO UPDATE SET {{range $i, $f := .Fields}}{{if $i}}, {{end}}{{$f.SQLColumn}} = excluded.{{$f.SQLColumn}}{{end}}`
+
+	find{{.Type}}ByIDSQL = `SELECT id{{range .Fields}}, {{.SQLColumn}}{{end}} FROM {{.Table}} WHERE id = $1`
+
+	list{{.Type}}sSQL = `SELECT id{{range .Fields}}, {{.SQLColumn}}{{end}} FROM {{.Table}} ORDER BY id LIMIT $1`
+
+	list{{.Type}}sAfterCursorSQL = `SELECT id{{range .Fields}}, {{.SQLColumn}}{{end}} FROM {{.Table}} WHERE id > $1 ORDER BY id LIMIT $2`
+
+	delete{{.Type}}SQL = `DELETE FROM {{.Table}} WHERE id = $1`
+
+	{{.Package}}ExistsSQL = `SELECT EXISTS (SELECT 1 FROM {{.Table}} WHERE id = $1)`
+)
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scan{{.Type}}(row rowScanner) (*{{.Type}}, error) {
+	var id string
+{{- range .Fields}}
+	var {{.Unexported}} {{.GoType}}
+{{- end}}
+
+	if err := row.Scan(&id{{range .Fields}}, &{{.Unexported}}{{end}}); err != nil {
+		return nil, err
+	}
+
+	parsedID, err := New{{.Type}}ID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	return New{{.Type}}(parsedID{{range .Fields}}, {{.Unexported}}{{end}})
+}
+
+// Repository is a Postgres-backed store for {{.Type}}.
+type Repository struct{}
+
+// NewRepository builds a Repository.
+func NewRepository() *Repository { return &Repository{} }
+
+// Save upserts v.
+func (r *Repository) Save(ctx context.Context, tx uow.DBTX, v *{{.Type}}) error {
+	_, err := tx.ExecContext(ctx, upsert{{.Type}}SQL, v.ID().Value(){{range .Fields}}, v.{{.Exported}}(){{end}})
+
+	return err
+}
+
+// FindByID returns the {{.Type}} with the given id, or Err{{.Type}}NotFound.
+func (r *Repository) FindByID(ctx context.Context, tx uow.DBTX, id {{.Type}}ID) (*{{.Type}}, error) {
+	v, err := scan{{.Type}}(tx.QueryRowContext(ctx, find{{.Type}}ByIDSQL, id.Value()))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, Err{{.Type}}NotFound
+		}
+
+		return nil, err
+	}
+
+	return v, nil
+}
+
+// List returns up to limit {{.Type}}s ordered by id, after cursor if given.
+func (r *Repository) List(ctx context.Context, tx uow.DBTX, cursor *{{.Type}}ID, limit int) ([]*{{.Type}}, error) {
+	var rows *sql.Rows
+
+	var err error
+
+	if cursor == nil {
+		rows, err = tx.QueryContext(ctx, list{{.Type}}sSQL, limit)
+	} else {
+		rows, err = tx.QueryContext(ctx, list{{.Type}}sAfterCursorSQL, cursor.Value(), limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var items []*{{.Type}}
+
+	for rows.Next() {
+		v, err := scan{{.Type}}(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		items = append(items, v)
+	}
+
+	return items, rows.Err()
+}
+
+// Delete removes the {{.Type}} with the given id.
+func (r *Repository) Delete(ctx context.Context, tx uow.DBTX, id {{.Type}}ID) error {
+	_, err := tx.ExecContext(ctx, delete{{.Type}}SQL, id.Value())
+
+	return err
+}
+
+// Exists reports whether a {{.Type}} with the given id exists.
+func (r *Repository) Exists(ctx context.Context, tx uow.DBTX, id {{.Type}}ID) (bool, error) {
+	return uow.QueryExists(ctx, tx, {{.Package}}ExistsSQL, id.Value())
+}

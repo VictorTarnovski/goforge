@@ -1,0 +1,82 @@
+// Package authn verifies OIDC bearer tokens and carries the resulting
+// identity on the request context.
+package authn
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+)
+
+// Config is the OIDC provider this service trusts.
+type Config struct {
+	IssuerURL string
+	Audience  string
+}
+
+// Principal is the identity extracted from a verified bearer token.
+type Principal struct {
+	Subject string
+}
+
+type principalKey struct{}
+
+// ErrNoPrincipal is returned when no verified Principal is on the context.
+var ErrNoPrincipal = errors.New("no principal in context")
+
+// PrincipalFromContext returns the Principal Authenticate put on ctx.
+func PrincipalFromContext(ctx context.Context) (Principal, error) {
+	p, ok := ctx.Value(principalKey{}).(Principal)
+	if !ok {
+		return Principal{}, ErrNoPrincipal
+	}
+
+	return p, nil
+}
+
+func withPrincipal(ctx context.Context, p Principal) context.Context {
+	return context.WithValue(ctx, principalKey{}, p)
+}
+
+// Verifier checks bearer tokens against an OIDC provider.
+type Verifier struct {
+	verifier *oidc.IDTokenVerifier
+}
+
+// NewVerifier fetches cfg.IssuerURL's OIDC discovery document and builds a
+// Verifier that checks tokens against it.
+func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
+	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Verifier{verifier: provider.Verifier(&oidc.Config{ClientID: cfg.Audience})}, nil
+}
+
+// ErrUnauthenticated is returned for a missing or invalid bearer token.
+var ErrUnauthenticated = errors.New("unauthenticated")
+
+// Authenticate requires a valid bearer token on every request it wraps,
+// putting the resulting Principal on the request context.
+func (v *Verifier) Authenticate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || token == "" {
+			http.Error(w, ErrUnauthenticated.Error(), http.StatusUnauthorized)
+			return
+		}
+
+		idToken, err := v.verifier.Verify(r.Context(), token)
+		if err != nil {
+			http.Error(w, ErrUnauthenticated.Error(), http.StatusUnauthorized)
+			return
+		}
+
+		r = r.WithContext(withPrincipal(r.Context(), Principal{Subject: idToken.Subject}))
+		next.ServeHTTP(w, r)
+	})
+}

@@ -1,0 +1,42 @@
+package db
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" driver with database/sql
+)
+
+// ValidateDSN reports whether dsn is a well-formed Postgres connection
+// string.
+func ValidateDSN(dsn string) error {
+	if dsn == "" {
+		return errors.New("is empty")
+	}
+	if _, err := pgx.ParseConfig(dsn); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Open opens and pings a connection pool for dsn.
+func Open(ctx context.Context, dsn string) (*sql.DB, error) {
+	database, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := database.PingContext(ctx); err != nil {
+		if closeErr := database.Close(); closeErr != nil {
+			err = fmt.Errorf("%w: %w", err, closeErr)
+		}
+
+		return nil, err
+	}
+
+	return database, nil
+}

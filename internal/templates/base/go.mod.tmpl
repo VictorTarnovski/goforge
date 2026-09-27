@@ -1,0 +1,19 @@
+module {{.Module}}
+
+go 1.26.0
+
+require (
+	github.com/coreos/go-oidc/v3 v3.20.0
+	github.com/google/uuid v1.6.0
+	github.com/joho/godotenv v1.5.1
+	github.com/spf13/cobra v1.10.2
+	github.com/spf13/viper v1.21.0
+	github.com/stretchr/testify v1.11.1
+{{- if .DB}}
+	github.com/jackc/pgx/v5 v5.10.0
+	github.com/pressly/goose/v3 v3.27.1
+{{- end}}
+{{- if .HasAuthz}}
+	github.com/openfga/go-sdk v0.8.2
+{{- end}}
+)

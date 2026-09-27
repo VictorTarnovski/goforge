@@ -1,0 +1,179 @@
+package httpx
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+)
+
+// ErrForbidden classifies to an HTTP 403.
+var ErrForbidden = errors.New("forbidden")
+
+// ErrNotFound classifies to an HTTP 404.
+var ErrNotFound = errors.New("not found")
+
+// RequiredQueryParamError reports a missing required query parameter.
+type RequiredQueryParamError struct {
+	Param string
+}
+
+func (e *RequiredQueryParamError) Error() string {
+	return fmt.Sprintf("missing required query param '%s'", e.Param)
+}
+
+// Is implements errors.Is against any *RequiredQueryParamError.
+func (e *RequiredQueryParamError) Is(target error) bool {
+	_, ok := target.(*RequiredQueryParamError)
+	return ok
+}
+
+// InvalidQueryParamError reports a query parameter that failed to parse as
+// the expected type.
+type InvalidQueryParamError struct {
+	Param  string
+	Expect string
+}
+
+func (e *InvalidQueryParamError) Error() string {
+	return fmt.Sprintf("query param '%s' must be %s", e.Param, e.Expect)
+}
+
+// Is implements errors.Is against any *InvalidQueryParamError.
+func (e *InvalidQueryParamError) Is(target error) bool {
+	_, ok := target.(*InvalidQueryParamError)
+	return ok
+}
+
+// DecodeBody decodes a JSON request body into T, and rewinds r.Body so a
+// caller further down the chain (a resolver that needs to peek at the body
+// before the handler itself decodes it) can still read it.
+func DecodeBody[T any](r *http.Request) (T, error) {
+	var body T
+
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return body, err
+	}
+
+	_ = r.Body.Close()
+
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return body, err
+	}
+
+	return body, nil
+}
+
+// HandlerFunc is an http.HandlerFunc that also returns an error, which
+// Kit.Wrap classifies into an RFC 7807 problem response.
+type HandlerFunc func(w http.ResponseWriter, r *http.Request) error
+
+// Classifier maps an error to a ProblemDetail. Its Instance field is left
+// zero-valued by classifiers; Kit.Wrap fills it in from the request path.
+type Classifier func(err error) (ProblemDetail, bool)
+
+func classifyErrQueryParam(err error) (ProblemDetail, bool) {
+	if errors.Is(err, &RequiredQueryParamError{}) || errors.Is(err, &InvalidQueryParamError{}) {
+		return NewProblemDetail(
+			"https://datatracker.ietf.org/doc/html/rfc7231#section-6.5.1",
+			http.StatusBadRequest,
+			"",
+			WithDetail(err.Error()),
+		), true
+	}
+
+	return ProblemDetail{}, false
+}
+
+func classifyErrNotFound(err error) (ProblemDetail, bool) {
+	if errors.Is(err, ErrNotFound) {
+		return NewProblemDetail(
+			"https://datatracker.ietf.org/doc/html/rfc7231#section-6.5.4",
+			http.StatusNotFound,
+			"",
+			WithDetail(ErrNotFound.Error()),
+		), true
+	}
+
+	return ProblemDetail{}, false
+}
+
+func classifyErrForbidden(err error) (ProblemDetail, bool) {
+	if errors.Is(err, ErrForbidden) {
+		return NewProblemDetail(
+			"https://datatracker.ietf.org/doc/html/rfc7231#section-6.5.5",
+			http.StatusForbidden,
+			"",
+			WithDetail(ErrForbidden.Error()),
+		), true
+	}
+
+	return ProblemDetail{}, false
+}
+
+// NewErrorMapper composes classifiers into one, trying each in order and
+// falling back to the errors generic to the kit itself (malformed query
+// params, an unresolved resource, a denied request).
+func NewErrorMapper(classifiers ...Classifier) Classifier {
+	all := make([]Classifier, len(classifiers), len(classifiers)+3)
+	copy(all, classifiers)
+	all = append(all, classifyErrQueryParam, classifyErrNotFound, classifyErrForbidden)
+
+	return func(err error) (ProblemDetail, bool) {
+		for _, classify := range all {
+			if problem, ok := classify(err); ok {
+				return problem, ok
+			}
+		}
+
+		return ProblemDetail{}, false
+	}
+}
+
+// Kit is the shared dependency every domain's handler wraps its routes
+// with: structured logging and error classification.
+type Kit struct {
+	Log      *slog.Logger
+	Classify Classifier
+}
+
+// Wrap adapts fn to http.HandlerFunc, classifying and logging any error fn
+// returns instead of requiring every handler to do so itself.
+func (k *Kit) Wrap(fn HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		err := fn(w, r)
+		if err == nil {
+			return
+		}
+
+		problem, ok := k.Classify(err)
+		if !ok {
+			k.logRequestError(r, err)
+			problem = NewProblemDetail(
+				"https://datatracker.ietf.org/doc/html/rfc7231#section-6.6.1",
+				http.StatusInternalServerError,
+				"",
+			)
+		}
+
+		problem.Instance = r.URL.Path
+
+		if problem.Status == http.StatusUnauthorized {
+			w.Header().Set("WWW-Authenticate", `Bearer`)
+		}
+
+		if err := writeProblem(w, problem); err != nil {
+			k.logRequestError(r, err)
+		}
+	}
+}
+
+func (k *Kit) logRequestError(r *http.Request, err error) {
+	k.Log.Error(r.Method+" "+r.URL.Path, "err", err)
+}

@@ -1,0 +1,269 @@
+// Command {{.Project}}-api runs the {{.Project}} HTTP API server.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"{{.Module}}/internal/authn"
+{{- if .HasAuthz}}
+	"{{.Module}}/internal/authz"
+{{- end}}
+	"{{.Module}}/internal/config"
+{{- if .DB}}
+	"{{.Module}}/internal/db"
+{{- end}}
+	"{{.Module}}/internal/gopher"
+	"{{.Module}}/internal/httpx"
+{{- if .DB}}
+	"{{.Module}}/internal/uow"
+{{- end}}
+	// goforge:import
+
+	"github.com/joho/godotenv"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+)
+
+func parseOrigins(raw string) ([]string, error) {
+	var origins []string
+
+	for part := range strings.SplitSeq(raw, ",") {
+		origin := strings.TrimRight(strings.TrimSpace(part), "/")
+		if origin == "" {
+			continue
+		}
+
+		u, err := url.Parse(origin)
+		if err != nil {
+			return nil, fmt.Errorf("allowed-origins: %q: %w", origin, err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return nil, fmt.Errorf("allowed-origins: %q must start with http:// or https://", origin)
+		}
+		if u.Host == "" || u.Path != "" {
+			return nil, fmt.Errorf("allowed-origins: %q must be scheme://host[:port] with no path", origin)
+		}
+
+		origins = append(origins, origin)
+	}
+
+	if len(origins) == 0 {
+		return nil, errors.New("allowed-origins is required, list the browser origins allowed to call this API")
+	}
+
+	return origins, nil
+}
+
+{{if .DB}}
+type pinger interface {
+	PingContext(ctx context.Context) error
+}
+{{end}}
+type healthHandler struct {
+	shuttingDown <-chan struct{}
+{{- if .DB}}
+	db pinger
+{{- end}}
+}
+
+func (h *healthHandler) registerRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /health/live", h.live)
+	mux.HandleFunc("GET /health/ready", h.ready)
+}
+
+func (h *healthHandler) live(w http.ResponseWriter, _ *http.Request) {
+	writeStatus(w, http.StatusOK)
+}
+
+func (h *healthHandler) ready(w http.ResponseWriter, {{if .DB}}r{{else}}_{{end}} *http.Request) {
+	select {
+	case <-h.shuttingDown:
+		writeStatus(w, http.StatusServiceUnavailable)
+		return
+	default:
+	}
+{{- if .DB}}
+
+	if err := h.db.PingContext(r.Context()); err != nil {
+		writeStatus(w, http.StatusServiceUnavailable)
+		return
+	}
+{{- end}}
+	writeStatus(w, http.StatusOK)
+}
+
+func writeStatus(w http.ResponseWriter, code int) {
+	w.WriteHeader(code)
+}
+
+// domains is every vertical slice this API serves. `goforge generate domain`
+// appends to this list and to classifiers below — that is the whole of what
+// wiring a new domain into the API takes.
+var domains = []func(mux *http.ServeMux, kit *httpx.Kit{{if .DB}}, u uow.UnitOfWork{{end}}{{if .HasAuthz}}, checker *authz.Checker{{end}}){
+	gopher.Wire,
+	// goforge:domain
+}
+
+var classifiers = []httpx.Classifier{
+	gopher.ClassifyError,
+	// goforge:classifier
+}
+
+func routes(kit *httpx.Kit{{if .DB}}, u uow.UnitOfWork{{end}}{{if .HasAuthz}}, checker *authz.Checker{{end}}) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	for _, wire := range domains {
+		wire(mux, kit{{if .DB}}, u{{end}}{{if .HasAuthz}}, checker{{end}})
+	}
+
+	return mux
+}
+
+func newServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+}
+
+func run(v *viper.Viper) error {
+	ctx := context.Background()
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	origins, err := parseOrigins(v.GetString("allowed-origins"))
+	if err != nil {
+		logger.Error("invalid configuration", "err", err)
+		return err
+	}
+{{- if .DB}}
+
+	dsn, err := config.DSN(v)
+	if err != nil {
+		logger.Error("invalid configuration", "err", err)
+		return err
+	}
+
+	database, err := db.Open(ctx, dsn)
+	if err != nil {
+		logger.Error("open database", "err", err)
+		return err
+	}
+	defer func() { _ = database.Close() }()
+{{- end}}
+
+	verifier, err := authn.NewVerifier(ctx, authn.Config{
+		IssuerURL: v.GetString("oidc-issuer"),
+		Audience:  v.GetString("oidc-audience"),
+	})
+	if err != nil {
+		logger.Error("configure authentication", "err", err)
+		return err
+	}
+{{- if .HasAuthz}}
+
+	checker, err := authz.NewChecker(config.OpenFGA(v))
+	if err != nil {
+		logger.Error("configure authorization", "err", err)
+		return err
+	}
+{{- end}}
+
+	shuttingDown := make(chan struct{})
+	health := &healthHandler{
+		shuttingDown: shuttingDown,
+{{- if .DB}}
+		db:           database,
+{{- end}}
+	}
+
+	kit := &httpx.Kit{
+		Log:      logger,
+		Classify: httpx.NewErrorMapper(classifiers...),
+	}
+
+	handler := httpx.CORS(origins)(verifier.Authenticate(routes(kit{{if .DB}}, uow.New(database){{end}}{{if .HasAuthz}}, checker{{end}})))
+
+	top := http.NewServeMux()
+	health.registerRoutes(top)
+	top.Handle("/", handler)
+
+	srv := newServer(":8080", top)
+
+	go func() {
+		logger.Info("listening", "addr", srv.Addr)
+
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	close(shuttingDown)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("shutdown", "err", err)
+	}
+
+	return nil
+}
+
+func newRootCmd() *cobra.Command {
+	v := config.New("{{.EnvPrefix}}")
+
+	cmd := &cobra.Command{
+		Use:           "{{.Project}}-api",
+		Short:         "Runs the {{.Project}} API server",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return run(v)
+		},
+	}
+{{- if .DB}}
+
+	config.BindPostgres(cmd, v)
+{{- end}}
+{{- if .HasAuthz}}
+	config.BindOpenFGA(cmd, v)
+{{- end}}
+	config.BindOIDC(cmd, v)
+
+	cmd.PersistentFlags().String("allowed-origins", "", "Comma-separated list of browser origins allowed to call this API")
+	_ = v.BindPFlag("allowed-origins", cmd.PersistentFlags().Lookup("allowed-origins"))
+
+	return cmd
+}
+
+func main() {
+	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		logger.Error("load .env", "err", err)
+		os.Exit(1)
+	}
+
+	if err := newRootCmd().Execute(); err != nil {
+		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("run", "err", err)
+		os.Exit(1)
+	}
+}

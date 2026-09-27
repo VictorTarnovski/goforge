@@ -1,0 +1,32 @@
+---
+description: Exige lista explícita de colunas em todos os INSERT SQL (Go, migrations, seeds).
+globs: "**/*.go,**/*.sql"
+alwaysApply: false
+---
+
+# INSERT SQL: sempre usar nomes de colunas
+
+Em qualquer `INSERT` (incluindo `INSERT OR IGNORE`, `INSERT OR REPLACE`, `INSERT OR ROLLBACK`, etc.), **é obrigatório** declarar a lista de colunas imediatamente após o nome da tabela.
+
+## Obrigatório
+
+```sql
+INSERT INTO posts (id, body, like_count, comment_count, author_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?);
+```
+
+## Evitar
+
+```sql
+INSERT INTO posts VALUES (?, ?, ?, ?, ?, ?);
+```
+
+## Âmbito
+
+- Strings SQL em ficheiros Go (`ExecContext`, constantes, testes).
+- Ficheiros `.sql` (migrations, seeds, fixtures).
+
+## Motivo
+
+- Ordem das colunas deixa de depender da definição física da tabela.
+- Alterações ao schema são mais seguras e os diffs ficam mais claros.

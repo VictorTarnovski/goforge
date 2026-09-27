@@ -1,0 +1,103 @@
+// Package authz answers permission questions against an OpenFGA store.
+package authz
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/openfga/go-sdk/client"
+	"github.com/openfga/go-sdk/credentials"
+)
+
+// Config is the OpenFGA store this service checks permissions against.
+type Config struct {
+	APIURL               string
+	StoreID              string
+	AuthorizationModelID string
+	APIToken             string
+}
+
+// Checker answers permission questions against an OpenFGA store.
+type Checker struct {
+	client *client.OpenFgaClient
+}
+
+// NewChecker builds a Checker connected to cfg's store.
+func NewChecker(cfg Config) (*Checker, error) {
+	if cfg.APIURL == "" {
+		return nil, errors.New("openfga api url is required")
+	}
+	if cfg.StoreID == "" {
+		return nil, errors.New("openfga store id is required")
+	}
+
+	clientCfg := &client.ClientConfiguration{
+		ApiUrl:               cfg.APIURL,
+		StoreId:              cfg.StoreID,
+		AuthorizationModelId: cfg.AuthorizationModelID,
+	}
+
+	if cfg.APIToken != "" {
+		creds, err := credentials.NewCredentials(credentials.Credentials{
+			Method: credentials.CredentialsMethodApiToken,
+			Config: &credentials.Config{ApiToken: cfg.APIToken},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("openfga credentials: %w", err)
+		}
+
+		clientCfg.Credentials = creds
+	}
+
+	fgaClient, err := client.NewSdkClient(clientCfg)
+	if err != nil {
+		return nil, fmt.Errorf("openfga client: %w", err)
+	}
+
+	return &Checker{client: fgaClient}, nil
+}
+
+// Check reports whether user holds relation on object, e.g.
+// Check(ctx, "user:alice", "can_manage", "gopher:123").
+func (c *Checker) Check(ctx context.Context, user, relation, object string) (bool, error) {
+	resp, err := c.client.Check(ctx).Body(client.ClientCheckRequest{
+		User:     user,
+		Relation: relation,
+		Object:   object,
+	}).Execute()
+	if err != nil {
+		return false, fmt.Errorf("openfga check %s on %s: %w", relation, object, err)
+	}
+
+	return resp.GetAllowed(), nil
+}
+
+// BatchCheck reports, for every object in objects, whether user holds
+// relation on it — used to filter a list down to what the caller may see.
+func (c *Checker) BatchCheck(ctx context.Context, user, relation string, objects []string) (map[string]bool, error) {
+	if len(objects) == 0 {
+		return map[string]bool{}, nil
+	}
+
+	body := make(client.ClientBatchCheckClientBody, len(objects))
+	for i, object := range objects {
+		body[i] = client.ClientCheckRequest{User: user, Relation: relation, Object: object}
+	}
+
+	resp, err := c.client.ClientBatchCheck(ctx).Body(body).Execute()
+	if err != nil {
+		return nil, fmt.Errorf("openfga batch check %s: %w", relation, err)
+	}
+
+	allowed := make(map[string]bool, len(objects))
+	for _, result := range *resp {
+		if result.Error != nil {
+			return nil, fmt.Errorf("openfga batch check %s on %s: %w", relation, result.Request.Object, result.Error)
+		}
+
+		allowed[result.Request.Object] = result.GetAllowed()
+	}
+
+	return allowed, nil
+}
