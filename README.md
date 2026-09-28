@@ -2,7 +2,7 @@
 
 An opinionated Go project scaffolder — like [go-blueprint](https://github.com/melkeydev/go-blueprint), but wired to one fixed stack and one set of conventions instead of a menu of choices.
 
-Every project it generates gets: `cmd/api` + `cmd/ctl` entrypoints, `net/http` + a shared `httpx` kit, OIDC authentication, `viper` + `cobra` config, a working example domain (full CRUD vertical slice), `.golangci.yml`, a `Makefile`, GitHub Actions CI, and the `golang-*` conventions library (`.claude/skills`, `.agents/rules`) vendored in — so an AI agent (or a human) working in the generated repo already knows the conventions to follow.
+Every project it generates gets: `cmd/api` + `cmd/ctl` entrypoints, `net/http` + a shared `httpx` kit, OIDC authentication, `viper` + `cobra` config, a working example domain (full CRUD vertical slice), `.golangci.yml`, a `Makefile`, GitHub Actions CI, and the project's Go conventions (`.agents/rules/*.mdc`, pointed to from a root `AGENTS.md`) vendored in — so an AI agent (or a human) working in the generated repo already knows the conventions to follow.
 
 ## Install
 
@@ -64,8 +64,8 @@ migrations/          goose SQL migrations (only with --db)
 build/               Dockerfile
 deploy/nginx/        reverse-proxy config (only with --deploy=nginx)
 docs/adr/            architecture decision records, with a starter template
-.claude/skills/,
-.agents/rules/        vendored Go conventions library (point-in-time snapshot, not auto-synced)
+.agents/rules/       vendored Go convention rules (point-in-time snapshot, not auto-synced)
+AGENTS.md            points agents at .agents/rules/ and at `generate domain`
 .golangci.yml, Makefile, .github/workflows/ci.yml, README.md, .env.example
 ```
 

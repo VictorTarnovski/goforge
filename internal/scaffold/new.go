@@ -38,7 +38,7 @@ func New(opts NewOptions) error {
 		return fmt.Errorf("render project skeleton: %w", err)
 	}
 
-	if err := CopyTree(templates.Skills, "skills", opts.Dir); err != nil {
+	if err := CopyTree(templates.Rules, "rules", opts.Dir); err != nil {
 		return fmt.Errorf("vendor conventions library: %w", err)
 	}
 

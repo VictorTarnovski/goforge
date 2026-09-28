@@ -1,0 +1,12 @@
+# Agent guardrails
+
+This project follows the Go conventions recorded under `.agents/rules/` —
+read every `*.mdc` file there before making changes. They cover things a
+generic Go style guide won't: this project's specific footguns, SQL
+column-ordering conventions, where a domain's files must live, and similar
+project-specific rules.
+
+When adding a new domain, prefer `goforge generate domain <name> --fields ...`
+over hand-writing one — it keeps the vertical-slice shape (model, service,
+repository, HTTP handler, tests) and the wiring in `cmd/api/main.go`
+consistent with every other domain in this project.

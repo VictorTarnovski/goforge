@@ -18,10 +18,10 @@ var Base embed.FS
 //go:embed all:domain
 var Domain embed.FS
 
-// Skills is a vendored, point-in-time snapshot of the golang-* conventions
-// library (.claude/skills, .agents/rules), copied verbatim into every
+// Rules is a vendored, point-in-time snapshot of the project's Cursor-style
+// convention rules (.agents/rules/*.mdc), copied verbatim into every
 // scaffolded project. It is not resynced automatically; see README.md for
 // how to pull in updates.
 //
-//go:embed all:skills
-var Skills embed.FS
+//go:embed all:rules
+var Rules embed.FS
