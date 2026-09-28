@@ -71,11 +71,11 @@ func DecodeBody[T any](r *http.Request) (T, error) {
 }
 
 // HandlerFunc is an http.HandlerFunc that also returns an error, which
-// Kit.Wrap classifies into an RFC 7807 problem response.
+// ErrorHandler.Wrap classifies into an RFC 7807 problem response.
 type HandlerFunc func(w http.ResponseWriter, r *http.Request) error
 
 // Classifier maps an error to a ProblemDetail. Its Instance field is left
-// zero-valued by classifiers; Kit.Wrap fills it in from the request path.
+// zero-valued by classifiers; ErrorHandler.Wrap fills it in from the request path.
 type Classifier func(err error) (ProblemDetail, bool)
 
 func classifyErrQueryParam(err error) (ProblemDetail, bool) {
@@ -118,8 +118,8 @@ func classifyErrForbidden(err error) (ProblemDetail, bool) {
 }
 
 // NewErrorMapper composes classifiers into one, trying each in order and
-// falling back to the errors generic to the kit itself (malformed query
-// params, an unresolved resource, a denied request).
+// falling back to the errors generic to the ErrorHandler itself (malformed
+// query params, an unresolved resource, a denied request).
 func NewErrorMapper(classifiers ...Classifier) Classifier {
 	all := make([]Classifier, len(classifiers), len(classifiers)+3)
 	copy(all, classifiers)
@@ -136,25 +136,25 @@ func NewErrorMapper(classifiers ...Classifier) Classifier {
 	}
 }
 
-// Kit is the shared dependency every domain's handler wraps its routes
-// with: structured logging and error classification.
-type Kit struct {
+// ErrorHandler is the shared dependency every domain's handler wraps its
+// routes with: structured logging and error classification.
+type ErrorHandler struct {
 	Log      *slog.Logger
 	Classify Classifier
 }
 
 // Wrap adapts fn to http.HandlerFunc, classifying and logging any error fn
 // returns instead of requiring every handler to do so itself.
-func (k *Kit) Wrap(fn HandlerFunc) http.HandlerFunc {
+func (e *ErrorHandler) Wrap(fn HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		err := fn(w, r)
 		if err == nil {
 			return
 		}
 
-		problem, ok := k.Classify(err)
+		problem, ok := e.Classify(err)
 		if !ok {
-			k.logRequestError(r, err)
+			e.logRequestError(r, err)
 			problem = NewProblemDetail(
 				"https://datatracker.ietf.org/doc/html/rfc7231#section-6.6.1",
 				http.StatusInternalServerError,
@@ -169,11 +169,11 @@ func (k *Kit) Wrap(fn HandlerFunc) http.HandlerFunc {
 		}
 
 		if err := writeProblem(w, problem); err != nil {
-			k.logRequestError(r, err)
+			e.logRequestError(r, err)
 		}
 	}
 }
 
-func (k *Kit) logRequestError(r *http.Request, err error) {
-	k.Log.Error(r.Method+" "+r.URL.Path, "err", err)
+func (e *ErrorHandler) logRequestError(r *http.Request, err error) {
+	e.Log.Error(r.Method+" "+r.URL.Path, "err", err)
 }

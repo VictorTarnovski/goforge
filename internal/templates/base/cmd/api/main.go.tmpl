@@ -109,7 +109,7 @@ func writeStatus(w http.ResponseWriter, code int) {
 // domains is every vertical slice this API serves. `goforge generate domain`
 // appends to this list and to classifiers below — that is the whole of what
 // wiring a new domain into the API takes.
-var domains = []func(mux *http.ServeMux, kit *httpx.Kit{{if .DB}}, u uow.UnitOfWork{{end}}{{if .HasAuthz}}, checker *authz.Checker{{end}}){
+var domains = []func(mux *http.ServeMux, errorHandler *httpx.ErrorHandler{{if .DB}}, u uow.UnitOfWork{{end}}{{if .HasAuthz}}, checker *authz.Checker{{end}}){
 	gopher.Wire,
 	// goforge:domain
 }
@@ -119,11 +119,11 @@ var classifiers = []httpx.Classifier{
 	// goforge:classifier
 }
 
-func routes(kit *httpx.Kit{{if .DB}}, u uow.UnitOfWork{{end}}{{if .HasAuthz}}, checker *authz.Checker{{end}}) *http.ServeMux {
+func routes(errorHandler *httpx.ErrorHandler{{if .DB}}, u uow.UnitOfWork{{end}}{{if .HasAuthz}}, checker *authz.Checker{{end}}) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	for _, wire := range domains {
-		wire(mux, kit{{if .DB}}, u{{end}}{{if .HasAuthz}}, checker{{end}})
+		wire(mux, errorHandler{{if .DB}}, u{{end}}{{if .HasAuthz}}, checker{{end}})
 	}
 
 	return mux
@@ -191,16 +191,16 @@ func run(v *viper.Viper) error {
 {{- end}}
 	}
 
-	kit := &httpx.Kit{
+	errorHandler := &httpx.ErrorHandler{
 		Log:      logger,
 		Classify: httpx.NewErrorMapper(classifiers...),
 	}
 
-	handler := httpx.CORS(origins)(verifier.Authenticate(routes(kit{{if .DB}}, uow.New(database){{end}}{{if .HasAuthz}}, checker{{end}})))
+	apiHandler := httpx.CORS(origins)(verifier.Authenticate(routes(errorHandler{{if .DB}}, uow.New(database){{end}}{{if .HasAuthz}}, checker{{end}})))
 
 	top := http.NewServeMux()
 	health.registerRoutes(top)
-	top.Handle("/", handler)
+	top.Handle("/", apiHandler)
 
 	srv := newServer(":8080", top)
 
